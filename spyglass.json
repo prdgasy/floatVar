@@ -1,0 +1,10 @@
+{
+    "env": {
+        "exclude": [
+            "node_modules",
+            ".git",
+            ".github",
+            "src"
+        ]
+    }
+}

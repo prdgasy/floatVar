@@ -1,0 +1,26 @@
+{
+  "name": "@prodigelib/floatVar",
+  "@prodigelib/floatVar": "github:prdgasy/floatVar",
+  "version": "0.0.1",
+  "description": "A pack created with Sandstone",
+  "type": "module",
+  "module": "src/test.ts",
+  "scripts": {
+    "dev:watch": "sand watch",
+    "dev:build": "sand build",
+    "setup": "bun i"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "sandstone-cli": "^2.6.9"
+  },
+  "dependencies": {
+    "sandstone": "~1.2.36"
+  },
+  "trustedDependencies": [
+    "@parcel/watcher"
+  ]
+}
