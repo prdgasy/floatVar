@@ -3,7 +3,7 @@ import { FloatVar } from "./floatVar";
 
 MCFunction('test', () => {
   const a = new FloatVar(1.009);
-  const b = new FloatVar(-4);
+  const b = new FloatVar(-2.46435635234);
 
   tellraw('@p', b.show());
 });

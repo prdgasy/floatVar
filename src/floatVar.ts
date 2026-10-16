@@ -84,18 +84,20 @@ export class FloatVar {
     const unit = this.score['/'](this.pow)
     const frac = this.score['-'](unit['*'](this.pow));
 
-    _.if(frac['<'](0), () => frac['*='](-1));
+    const l = FloatVar.storage.select('unit').set(unit);
+    const r = FloatVar.storage.select('frac').set(FloatVar.scoreAbs(frac));
 
-    const l = DataVariable(unit);
-    const r = DataVariable(frac);
-    const p = DataVariable('.');
-
-    const setValue = MCFunction('__lib/floatvar/set_value', [l, p, r], () => {
-      $.data.modify(this.out).set.value($`${l}${p}${r}`);
+    const setValue = MCFunction('__lib/floatvar/set_value', [l, r], () => {
+      $.data.modify(this.out).set.value($`${l}.${r}`);
     }, { onConflict: 'ignore' });
     setValue();
 
     return this.out;
+  }
+
+  private static scoreAbs(s: Score) {
+    _.if(s['<'](0), () => s['*'](-1));
+    return s;
   }
 
   public greaterThan(other: numberLike) {
