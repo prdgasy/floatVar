@@ -1,4 +1,5 @@
-import { _, Data, DataPointClass, DataVariable, defaultNamespace, Macro as $, Score, Variable, MCFunction } from "sandstone";
+import { _, Data, DataPointClass, DataVariable, defaultNamespace, Macro as $, Score, Variable, MCFunction, execute, random } from "sandstone";
+import { FinalCommandOutput } from "sandstone/commands";
 import { ConditionClass } from "sandstone/variables";
 
 type numberLike = FloatVar | Score | number;
@@ -15,13 +16,13 @@ export class FloatVar {
   private precision: number;
   private pow: number;
 
-  constructor(value?: numberLike, precision: number = 2) {
+  constructor(value: numberLike = 0, precision: number = 2, raw: boolean = false) {
     this.precision = precision;
     this.pow = 10 ** this.precision;
-    if (value && typeof value === 'number') this.score = Variable(Math.round(value * this.pow));
-    else if (value && value instanceof Score) this.score = Variable(value);
-    else if (value && value instanceof FloatVar) this.score = value.score;
-    else this.score = Variable(0);
+    if (typeof value === 'number') this.score = Variable(raw ? value : Math.round(value * this.pow));
+    else if (value instanceof Score) this.score = raw ? value : this.normalize(value);
+    else this.score = raw ? value.getScore() : this.normalize(value);
+
   }
 
   public set(value: numberLike) {
@@ -54,7 +55,7 @@ export class FloatVar {
     const powDiff = this.precision - other.precision;
 
     if (powDiff > 0) return other.score["*"](10 ** powDiff);
-    return other.score["/"](10 ** -powDiff);
+    return Variable(other.score["/"](10 ** -powDiff));
   }
 
   private affectOp(other: numberLike, op: '+=' | '-=' | '*=' | '/='): FloatVar {
@@ -98,6 +99,20 @@ export class FloatVar {
   private static scoreAbs(s: Score) {
     _.if(s['<'](0), () => s['*'](-1));
     return s;
+  }
+
+  /**
+   * Generates a random float between [0, 1]
+   * @example
+   * ```typescript
+   * FloatVar.random(3).show() >> 0.254
+   * FloatVar.random(1).show() >> 0.4
+   * ```
+   */
+  public static random(precision: number = 2): FloatVar {
+    const v = Variable();
+    execute.store.result(v).run.random.value([0, 10 ** precision]);
+    return new FloatVar(v, precision, true);
   }
 
   public greaterThan(other: numberLike) {
