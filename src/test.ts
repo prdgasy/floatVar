@@ -1,7 +1,12 @@
-import { _, Data, DataVariable, MCFunction, NBT, random, say, tellraw } from "sandstone";
+import { _, comment, Data, DataVariable, MCFunction, NBT, random, say, tellraw } from "sandstone";
 import { FloatVar } from "./floatVar";
 
 MCFunction('test', () => {
-  const a = new FloatVar(1.009, 3);
-  tellraw('@p', FloatVar.random(5)["+"](a).show());
+  const d = DataVariable(1.2);
+  const a = new FloatVar(d, 4);
+  tellraw('@p', a.show());
+
+  comment("============");
+
+  a["+="](d);
 });

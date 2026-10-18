@@ -2,7 +2,7 @@ import { _, Data, DataPointClass, DataVariable, defaultNamespace, Macro as $, Sc
 import { FinalCommandOutput } from "sandstone/commands";
 import { ConditionClass } from "sandstone/variables";
 
-type numberLike = FloatVar | Score | number;
+type numberLike = FloatVar | Score | number | DataPointClass;
 
 export class FloatVar {
   private static ns = defaultNamespace.toString();
@@ -14,20 +14,31 @@ export class FloatVar {
   private score: Score;
   private id = FloatVar.id++;
   private precision: number;
-  private pow: number;
+  private scale: number;
 
   constructor(value: numberLike = 0, precision: number = 2, raw: boolean = false) {
     this.precision = precision;
-    this.pow = 10 ** this.precision;
-    if (typeof value === 'number') this.score = Variable(raw ? value : Math.round(value * this.pow));
+    this.scale = 10 ** this.precision;
+    if (typeof value === 'number') this.score = Variable(raw ? value : Math.round(value * this.scale));
     else if (value instanceof Score) this.score = raw ? value : this.normalize(value);
+    else if (value instanceof DataPointClass) {
+      const scale = raw ? 1 : this.scale;
+      const v = DataVariable();
+      execute.store.result(v, 'int', scale).run.data.get(value);
+      this.score = Variable(v);
+    }
     else this.score = raw ? value.getScore() : this.normalize(value);
 
   }
 
   public set(value: numberLike) {
-    if (typeof value === 'number') this.score = Variable(Math.round(value * this.pow));
+    if (typeof value === 'number') this.score = Variable(Math.round(value * this.scale));
     else if (value instanceof Score) this.score = Variable(value);
+    else if (value instanceof DataPointClass) {
+      const v = DataVariable();
+      execute.store.result(v, 'int', this.scale).run.data.get(value);
+      this.score = Variable(v);
+    }
     else this.score = value.score;
     return this;
   }
@@ -48,32 +59,41 @@ export class FloatVar {
     return this.getScore()[op](this.normalize(other));
   }
 
-  public normalize(other: numberLike): Score {
+  private normalize(other: numberLike): Score {
     if (typeof other === 'number') return new FloatVar(other, this.precision).getScore();
-    if (other instanceof Score) return other['*'](this.pow);
-    if (this.precision == other.precision) return other.getScore();
-    const powDiff = this.precision - other.precision;
+    else if (other instanceof Score) return other['*'](this.scale);
+    else if (other instanceof DataPointClass) {
+      const v = DataVariable();
+      execute.store.result(v, 'int', this.scale).run.data.get(other);
+      return Variable(v);
+    }
+    else {
+      if (this.precision == other.precision) return other.getScore();
+      const powDiff = this.precision - other.precision;
 
-    if (powDiff > 0) return other.score["*"](10 ** powDiff);
-    return Variable(other.score["/"](10 ** -powDiff));
+      if (powDiff > 0) return other.score["*"](10 ** powDiff);
+      return Variable(other.score["/"](10 ** -powDiff));
+    }
   }
 
   private affectOp(other: numberLike, op: '+=' | '-=' | '*=' | '/='): FloatVar {
     if (other instanceof FloatVar) this.score[op](this.normalize(other));
-    else if (other instanceof Score) this.score[op](other["*"](this.pow));
-    else this.score[op](other * this.pow);
+    else if (other instanceof Score) this.score[op](other["*"](this.scale));
+    else if (other instanceof DataPointClass) this.score[op](this.normalize(other));
+    else this.score[op](other * this.scale);
 
     return this;
   }
 
   private anonOp(other: numberLike, op: '+' | '-' | '*' | '/'): FloatVar {
-    let arg: Score;
+    let newV: Score;
 
-    if (other instanceof FloatVar) arg = this.score[op](this.normalize(other));
-    else if (other instanceof Score) arg = this.score[op](other["*"](this.pow));
-    else arg = this.score[op](other * this.pow);
+    if (other instanceof FloatVar) newV = this.score[op](this.normalize(other));
+    else if (other instanceof Score) newV = this.score[op](other["*"](this.scale));
+    else if (other instanceof DataPointClass) newV = this.score[op](this.normalize(other));
+    else newV = this.score[op](other * this.scale);
 
-    return new FloatVar(arg, this.precision);
+    return new FloatVar(newV, this.precision);
   }
 
   public getScore(): Score {
@@ -82,8 +102,8 @@ export class FloatVar {
 
   public show(): DataPointClass {
 
-    const unit = this.score['/'](this.pow)
-    const frac = this.score['-'](unit['*'](this.pow));
+    const unit = this.score['/'](this.scale)
+    const frac = this.score['-'](unit['*'](this.scale));
 
     const l = FloatVar.storage.select('unit').set(unit);
     const r = FloatVar.storage.select('frac').set(FloatVar.scoreAbs(frac));

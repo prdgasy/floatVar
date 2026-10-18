@@ -18,5 +18,8 @@ export default {
   namespace: 'floatvar',
   packUid: 'vX2v5xsQ',
   mcmeta: 'latest',
-  saveOptions: {},
+  saveOptions: {
+    clientPath: 'C:\\Users\\TOSHIBA\\AppData\\Roaming\\ModrinthApp\\profiles\\Data_Resource Pack Modpack',
+    world: 'FRIANDISE'
+  },
 } as SandstoneConfig
