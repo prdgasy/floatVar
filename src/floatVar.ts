@@ -58,10 +58,6 @@ export class FloatVar {
 
 		this.score = raw ? this.toRaw(value) : this.toScaled(value);
 	}
-
-	public toString() {
-		return this.show();
-	}
 	/** raw = true: the value is already scaled. */
 	private toRaw(value: numberLike): Score {
 		if (typeof value === 'number') return Variable(value);
