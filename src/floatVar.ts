@@ -21,8 +21,8 @@ import { ConditionClass } from "sandstone/variables";
  */
 export type numberLike = FloatVar | Score | number | DataPointClass;
 
-/** Max precision. Above 6, 1/scale is printed in scientific notation by JS, which Minecraft cannot parse. */
-const MAX_PRECISION = 6;
+/** Max precision. Above 4, 1/scale is printed in scientific notation by JS, which Minecraft cannot parse. */
+const MAX_PRECISION = 4;
 
 /**
  * Fixed-point number stored in a scoreboard (value * 10^precision).
@@ -44,9 +44,11 @@ export class FloatVar {
 	private out: DataPointClass;
 
 	/**
-	 * @param value Real value.
-	 * @param precision Number of decimals, 0..6.
-	 */
+ * @param value Real value (see numberLike), or an already-scaled value if `raw` is true.
+ * @param precision Number of decimals, 0..6.
+ * @param raw If true, `value` is already multiplied by 10^precision and is taken as is.
+ *            A raw Score is NOT copied: the instance takes ownership of it, so pass a fresh one.
+ */
 	constructor(value: numberLike = 0, precision: number = 2, raw: boolean = false) {
 		FloatVar.checkPrecision(precision);
 		this.precision = precision;
@@ -54,11 +56,18 @@ export class FloatVar {
 		this.id = FloatVar.nextId++;
 		this.out = FloatVar.storage.select(`out_${this.id}`);
 
-		const scaled = this.toScaled(value);
-		if (typeof value === 'number') this.score = raw ? Variable(value) : scaled;
-		else if (value instanceof Score) this.score = raw ? Variable(value) : scaled;
-		else if (value instanceof DataPointClass) this.score = raw ? Variable(value) : scaled;
-		else this.score = raw ? Variable(value.toScore()) : scaled;
+		this.score = raw ? this.toRaw(value) : this.toScaled(value);
+	}
+
+	public toString() {
+		return this.show();
+	}
+	/** raw = true: the value is already scaled. */
+	private toRaw(value: numberLike): Score {
+		if (typeof value === 'number') return Variable(value);
+		if (value instanceof FloatVar) return Variable(value.score);
+		if (value instanceof Score) return Variable(value);
+		return Variable(value);
 	}
 
 	private static checkPrecision(p: number) {
