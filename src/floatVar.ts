@@ -1,201 +1,376 @@
-import { _, Data, DataPointClass, DataVariable, defaultNamespace, Macro as $, Score, Variable, MCFunction, execute, random } from "sandstone";
-import { FinalCommandOutput } from "sandstone/commands";
+import {
+	Macro as $,
+	_,
+	Data,
+	DataPointClass,
+	defaultNamespace,
+	execute,
+	MCFunction,
+	Score,
+	Variable
+} from "sandstone";
+import { NotNode } from "sandstone/flow";
 import { ConditionClass } from "sandstone/variables";
 
-type numberLike = FloatVar | Score | number | DataPointClass;
+/**
+ * Accepted operand types.
+ * - `number`         : real value (1.5)
+ * - `Score`          : INTEGER value (a Score of 3 means 3.0)
+ * - `DataPointClass` : NBT number read as a real value
+ * - `FloatVar`       : another fixed-point value (any precision)
+ */
+export type numberLike = FloatVar | Score | number | DataPointClass;
 
+/** Max precision. Above 6, 1/scale is printed in scientific notation by JS, which Minecraft cannot parse. */
+const MAX_PRECISION = 6;
+
+/**
+ * Fixed-point number stored in a scoreboard (value * 10^precision).
+ *
+ * Range: ±2 147 483 647 / 10^precision (precision 2 → ±21 474 836.47, precision 4 → ±214 748.3647).
+ * Rounding: round-half-up (toward +∞ on ties) everywhere a rounding is needed.
+ * Scoreboard division by zero is a no-op in Minecraft; FloatVar division by zero returns 0.
+ */
 export class FloatVar {
-  private static ns = defaultNamespace.toString();
-  private static storage = Data('storage', `${this.ns}:prodigelib`, 'FloatVar');
-  private static id = 0;
+	private static nextId = 0;
+	private static ns = defaultNamespace.toString();
+	private static storage = Data('storage', `${FloatVar.ns}:prodigelib`, 'FloatVar');
 
-  private out = FloatVar.storage.select('out');
+	private score: Score;
+	private id: number;
+	private precision: number;
+	private scale: number;
 
-  private score: Score;
-  private id = FloatVar.id++;
-  private precision: number;
-  private scale: number;
+	private out: DataPointClass;
 
-  constructor(value: numberLike = 0, precision: number = 2, raw: boolean = false) {
-    this.precision = precision;
-    this.scale = 10 ** this.precision;
-    if (typeof value === 'number') this.score = Variable(raw ? value : Math.round(value * this.scale));
-    else if (value instanceof Score) this.score = raw ? value : this.normalize(value);
-    else if (value instanceof DataPointClass) {
-      const scale = raw ? 1 : this.scale;
-      const v = DataVariable();
-      execute.store.result(v, 'int', scale).run.data.get(value);
-      this.score = Variable(v);
-    }
-    else this.score = raw ? value.getScore() : this.normalize(value);
+	/**
+	 * @param value Real value.
+	 * @param precision Number of decimals, 0..6.
+	 */
+	constructor(value: numberLike = 0, precision: number = 2, raw: boolean = false) {
+		FloatVar.checkPrecision(precision);
+		this.precision = precision;
+		this.scale = 10 ** precision;
+		this.id = FloatVar.nextId++;
+		this.out = FloatVar.storage.select(`out_${this.id}`);
 
-  }
+		const scaled = this.toScaled(value);
+		if (typeof value === 'number') this.score = raw ? Variable(value) : scaled;
+		else if (value instanceof Score) this.score = raw ? Variable(value) : scaled;
+		else if (value instanceof DataPointClass) this.score = raw ? Variable(value) : scaled;
+		else this.score = raw ? Variable(value.toScore()) : scaled;
+	}
 
-  public set(value: numberLike) {
-    if (typeof value === 'number') this.score = Variable(Math.round(value * this.scale));
-    else if (value instanceof Score) this.score = Variable(value);
-    else if (value instanceof DataPointClass) {
-      const v = DataVariable();
-      execute.store.result(v, 'int', this.scale).run.data.get(value);
-      this.score = Variable(v);
-    }
-    else this.score = value.score;
-    return this;
-  }
+	private static checkPrecision(p: number) {
+		if (!Number.isInteger(p) || p < 0 || p > MAX_PRECISION) {
+			throw new RangeError(`FloatVar: precision must be an integer between 0 and ${MAX_PRECISION}, got ${p}`);
+		}
+	}
 
-  public abs(): FloatVar {
-    const a = new FloatVar(undefined, this.precision);
+	/**
+	 * Generates a random float in [min, max] (default [0, 1]).
+	 * @example
+	 * ```typescript
+	 * FloatVar.random(3).show()          // 0.254
+	 * FloatVar.random(1, -5, 5).show()   // -3.2
+	 * ```
+	 */
+	public static random(precision: number = 2, min: number = 0, max: number = 1): FloatVar {
+		FloatVar.checkPrecision(precision);
+		const s = 10 ** precision;
+		const v = Variable();
+		execute.store.result(v).run.random.value([Math.round(min * s), Math.round(max * s)]);
+		return new FloatVar(v, precision, true);
+	}
 
-    _.if(this['<'](0), () => {
-      a.set(this['*'](-1));
-    }).else(() => {
-      a.set(this);
-    });
+	/** Removes the whole lib storage. */
+	public static uninstall() {
+		FloatVar.storage.remove();
+	}
 
-    return a;
-  }
+	/** Round-half-up division by a compile-time positive integer. Returns a new Score. */
+	private static roundDiv(score: Score, d: number): Score {
+		const r = Variable(score);
+		if (d === 1) return r;
+		r['+='](Math.floor(d / 2));
+		r['/='](d);
+		return r;
+	}
 
-  private compare(other: numberLike, op: '>=' | '>' | '<=' | '<'): ConditionClass {
-    return this.getScore()[op](this.normalize(other));
-  }
+	/**
+	 * Any operand → score at THIS precision (or a constant).
+	 */
+	private toScaled(other: numberLike): Score {
+		if (typeof other === 'number') return Variable(Math.round(other * this.scale));
 
-  private normalize(other: numberLike): Score {
-    if (typeof other === 'number') return new FloatVar(other, this.precision).getScore();
-    else if (other instanceof Score) return other['*'](this.scale);
-    else if (other instanceof DataPointClass) {
-      const v = DataVariable();
-      execute.store.result(v, 'int', this.scale).run.data.get(other);
-      return Variable(v);
-    }
-    else {
-      if (this.precision == other.precision) return other.getScore();
-      const powDiff = this.precision - other.precision;
+		if (other instanceof FloatVar) {
+			const diff = this.precision - other.precision;
+			if (diff === 0) return other.score;
+			if (diff > 0) {
+				const t = Variable(other.score);
+				t['*='](10 ** diff);
+				return t;
+			}
+			return FloatVar.roundDiv(other.score, 10 ** -diff);
+		}
 
-      if (powDiff > 0) return other.score["*"](10 ** powDiff);
-      return Variable(other.score["/"](10 ** -powDiff));
-    }
-  }
+		if (other instanceof Score) {
+			if (this.scale === 1) return other;
+			const t = Variable(other);
+			t['*='](this.scale);
+			return t;
+		}
 
-  private affectOp(other: numberLike, op: '+=' | '-=' | '*=' | '/='): FloatVar {
-    if (other instanceof FloatVar) this.score[op](this.normalize(other));
-    else if (other instanceof Score) this.score[op](other["*"](this.scale));
-    else if (other instanceof DataPointClass) this.score[op](this.normalize(other));
-    else this.score[op](other * this.scale);
+		const v = Variable();
+		execute.store.result(v).run.data.get(other, this.scale);
+		return v;
+	}
 
-    return this;
-  }
+	public clone(): FloatVar {
+		return new FloatVar(this.score, this.precision, true);
+	}
 
-  private anonOp(other: numberLike, op: '+' | '-' | '*' | '/'): FloatVar {
-    let newV: Score;
+	public getRawScore(): Score {
+		return this.score;
+	}
 
-    if (other instanceof FloatVar) newV = this.score[op](this.normalize(other));
-    else if (other instanceof Score) newV = this.score[op](other["*"](this.scale));
-    else if (other instanceof DataPointClass) newV = this.score[op](this.normalize(other));
-    else newV = this.score[op](other * this.scale);
+	/**
+	 * Integer score. `mode`: 'floor' (default), 'round' (half up) or 'ceil'.
+	 * The floating part is lost.
+	 */
+	public toScore(mode: 'floor' | 'round' | 'ceil' = 'floor'): Score {
+		if (this.scale === 1) return Variable(this.score);
+		if (mode === 'round') return FloatVar.roundDiv(this.score, this.scale);
+		const r = Variable(this.score);
+		if (mode === 'floor') {
+			r['/='](this.scale);
+		} else {
+			r['*='](-1);
+			r['/='](this.scale);
+			r['*='](-1);
+		}
+		return r;
+	}
 
-    return new FloatVar(newV, this.precision);
-  }
+	/**
+	 * Writes the value as a real NBT number into storage (for teleport, attributes, entity data...).
+	 * @param type 'double' (default) or 'float'
+	 * @param target Destination path (default: a unique path per instance)
+	 */
+	public toData(type: 'float' | 'double' = 'double', target?: DataPointClass): DataPointClass {
+		const dest = target ?? FloatVar.storage.select(`data_${this.id}`);
+		execute.store.result(dest, type, 1 / this.scale).run.scoreboard.players.get(this.score);
+		return dest;
+	}
 
-  public getScore(): Score {
-    return this.score;
-  }
+	/** Returns an NBT number usable in tellraw. Each instance has its own path. */
+	public show(): DataPointClass {
+		const st = FloatVar.storage;
+		const sign = st.select('sign');
+		const unit = st.select('unit');
+		const temp = st.select('temp');
+		const p = this.precision;
 
-  public show(): DataPointClass {
+		const abs = Variable(this.score);
+		_.if(abs['<'](0), () => {
+			abs['*='](-1);
+			sign.set('-');
+		}).else(() => {
+			sign.set('');
+		});
 
-    const unit = this.score['/'](this.scale)
-    const frac = this.score['-'](unit['*'](this.scale));
+		const unitScore = Variable(abs);
+		unitScore['/='](this.scale);
+		unit.set(unitScore);
 
-    const l = FloatVar.storage.select('unit').set(unit);
-    const r = FloatVar.storage.select('frac').set(FloatVar.scoreAbs(frac));
+		const args: DataPointClass[] = [sign, unit];
+		for (let i = p - 1; i >= 0; i--) {
+			const decimal = Variable(abs);
+			if (i > 0) decimal['/='](10 ** i);
+			decimal['%='](10);
+			const d_i = st.select(`d${i}`);
+			d_i.set(decimal);
+			args.push(d_i);
+		}
 
-    const setValue = MCFunction('__lib/floatvar/set_value', [l, r], () => {
-      $.data.modify(this.out).set.value($`${l}.${r}`);
-    }, { onConflict: 'ignore' });
-    setValue();
+		const setValue = MCFunction(`__lib/floatvar/set_value_${p}`, args, () => {
+			// ${sign}${unit}.${d(p-1)}...${d0}
+			const strings: string[] = new Array(args.length + 1).fill('');
+			if (p > 0) strings[2] = '.';
+			const tag = $ as unknown as (s: TemplateStringsArray, ...v: unknown[]) => any;
+			const text = tag(Object.assign(strings, { raw: strings }) as unknown as TemplateStringsArray, ...args);
 
-    return this.out;
-  }
+			$.data.modify(temp).set.value(text);
+		}, { onConflict: 'ignore' });
+		setValue();
 
-  private static scoreAbs(s: Score) {
-    _.if(s['<'](0), () => s['*'](-1));
-    return s;
-  }
+		return this.out.set(temp);
+	}
 
-  /**
-   * Generates a random float between [0, 1]
-   * @example
-   * ```typescript
-   * FloatVar.random(3).show() >> 0.254
-   * FloatVar.random(1).show() >> 0.4
-   * ```
-   */
-  public static random(precision: number = 2): FloatVar {
-    const v = Variable();
-    execute.store.result(v).run.random.value([0, 10 ** precision]);
-    return new FloatVar(v, precision, true);
-  }
+	public set(value: numberLike) {
+		this.score.set(this.toScaled(value));
+		return this;
+	}
 
-  public greaterThan(other: numberLike) {
-    return this.compare(other, '>');
-  }
-  public ['>'] = this.greaterThan;
+	// ---------------------------------------------------------------- comparisons
+	private compare(other: numberLike, op: '>=' | '>' | '<=' | '<'): ConditionClass {
+		return this.score[op](this.toScaled(other));
+	}
 
-  public greaterOrEqualThan(other: numberLike) {
-    return this.compare(other, '>=');
-  }
-  public ['>='] = this.greaterOrEqualThan;
+	public greaterThan(other: numberLike) { return this.compare(other, '>'); }
+	public greaterOrEqualThan(other: numberLike) { return this.compare(other, '>='); }
+	public lessThan(other: numberLike) { return this.compare(other, '<'); }
+	public lessOrEqualThan(other: numberLike) { return this.compare(other, '<='); }
+	public equalTo(other: numberLike): ConditionClass { return this.score.equalTo(this.toScaled(other)); }
+	public notEqualTo(other: numberLike): NotNode { return this.score.notEqualTo(this.toScaled(other)); }
 
-  public lessThan(other: numberLike) {
-    return this.compare(other, '<');
-  }
-  public ['<'] = this.lessThan;
+	// ---------------------------------------------------------------- +, -
+	private additive(other: numberLike, op: '+=' | '-=', inPlace: boolean): FloatVar {
+		const o = this.toScaled(other);
+		if (inPlace) {
+			this.score[op](o);
+			return this;
+		}
+		const r = this.clone();
+		r.score[op](o);
+		return r;
+	}
 
-  public lessOrEqualThan(other: numberLike) {
-    return this.compare(other, '<=');
-  }
-  public ['<='] = this.lessOrEqualThan;
+	public plus(other: numberLike) { return this.additive(other, '+=', false); }
+	public minus(other: numberLike) { return this.additive(other, '-=', false); }
+	public add(other: numberLike) { return this.additive(other, '+=', true); }
+	public sub(other: numberLike) { return this.additive(other, '-=', true); }
 
-  public plus(other: numberLike) {
-    return this.anonOp(other, '+');
-  }
-  public ["+"] = this.plus;
+	// ---------------------------------------------------------------- *, /
+	private mulScore(other: numberLike, inPlace: boolean): Score {
+		const result = inPlace ? this.score : Variable(this.score);
+		result['*='](this.toScaled(other))['/='](this.scale);
+		return result;
+	}
 
-  public minus(other: numberLike) {
-    return this.anonOp(other, '-');
-  }
-  public ["-"] = this.minus;
+	private divScore(other: numberLike, inPlace: boolean): Score {
+		if (typeof other === 'number' && other === 0) throw new RangeError('FloatVar: division by constant zero');
 
-  public times(other: numberLike) {
-    return this.anonOp(other, '*');
-  }
-  public ["*"] = this.times;
+		const divisor = this.toScaled(other);          // lu AVANT de modifier result
+		const result = inPlace ? this.score : Variable(this.score);
+		result['*='](this.scale);                      // (a_s * scale) ...
+		result['/='](divisor);                         // ... / b_s
+		return result;
+	}
 
-  public dividedBy(other: numberLike) {
-    return this.anonOp(other, '/');
-  }
-  public ["/"] = this.dividedBy;
+	/** a * b. An integer (number or Score) is applied directly; a real goes through fixed-point multiplication. */
+	public times(other: numberLike) { return new FloatVar(this.mulScore(other, false), this.precision, true); }
+	public mult(other: numberLike) { this.mulScore(other, true); return this; }
 
-  public add(other: numberLike) {
-    return this.affectOp(other, '+=');
-  }
-  public ["+="] = this.add;
+	/** a / b. Division by zero gives 0. */
+	public dividedBy(other: numberLike) { return new FloatVar(this.divScore(other, false), this.precision, true); }
+	public div(other: numberLike) { this.divScore(other, true); return this; }
 
-  public sub(other: numberLike) {
-    return this.affectOp(other, '-=');
-  }
-  public ["-="] = this.sub;
+	/** a % b (result takes the sign of b, like the scoreboard). */
+	public mod(other: numberLike): FloatVar {
+		const r = this.clone();
+		r.score['%='](this.toScaled(other));
+		return r;
+	}
 
-  public mult(other: numberLike) {
-    return this.affectOp(other, '*=');
-  }
-  public ["*="] = this.mult;
+	// ---------------------------------------------------------------- math
+	public neg(): FloatVar {
+		const r = this.clone();
+		r.score['*='](-1);
+		return r;
+	}
 
-  public div(other: numberLike) {
-    return this.affectOp(other, '/=');
-  }
-  public ["/="] = this.div;
+	public abs(): FloatVar {
+		const r = this.clone();
+		_.if(r.score['<'](0), () => {
+			r.score['*='](-1);
+		});
+		return r;
+	}
 
-  public static uninstall() {
-    this.storage.remove();
-  }
+	/** Score: -1, 0 or 1. */
+	public sign(): Score {
+		const s = Variable(0);
+		_.if(this.score['>'](0), () => {
+			s.set(1);
+		});
+		_.if(this.score['<'](0), () => {
+			s.set(-1);
+		});
+		return s;
+	}
+
+	public min(other: numberLike): FloatVar {
+		const o = this.toScaled(other);
+		const r = this.clone();
+		_.if(r.score['>'](o), () => {
+			r.score.set(o);
+		});
+		return r;
+	}
+
+	public max(other: numberLike): FloatVar {
+		const o = this.toScaled(other);
+		const r = this.clone();
+		_.if(r.score['<'](o), () => {
+			r.score.set(o);
+		});
+		return r;
+	}
+
+	/** Largest integer value <= this (still a FloatVar). */
+	public floor(): FloatVar {
+		const r = this.toScore('floor');
+		r['*='](this.scale);
+		return new FloatVar(r, this.precision, true);
+	}
+
+	public ceil(): FloatVar {
+		const r = this.toScore('ceil');
+		r['*='](this.scale);
+		return new FloatVar(r, this.precision, true);
+	}
+
+	public round(): FloatVar {
+		const r = this.toScore('round');
+		r['*='](this.scale);
+		return new FloatVar(r, this.precision, true);
+	}
 }
+
+// -------------------------------------------------------------------- operator aliases
+// Declared once on the prototype instead of one closure per instance.
+export interface FloatVar {
+	'>'(other: numberLike): ConditionClass;
+	'>='(other: numberLike): ConditionClass;
+	'<'(other: numberLike): ConditionClass;
+	'<='(other: numberLike): ConditionClass;
+	'=='(other: numberLike): ConditionClass;
+	'!='(other: numberLike): NotNode;
+	'+'(other: numberLike): FloatVar;
+	'-'(other: numberLike): FloatVar;
+	'*'(other: numberLike): FloatVar;
+	'/'(other: numberLike): FloatVar;
+	'%'(other: numberLike): FloatVar;
+	'+='(other: numberLike): FloatVar;
+	'-='(other: numberLike): FloatVar;
+	'*='(other: numberLike): FloatVar;
+	'/='(other: numberLike): FloatVar;
+}
+
+const proto = FloatVar.prototype;
+proto['>'] = proto.greaterThan;
+proto['>='] = proto.greaterOrEqualThan;
+proto['<'] = proto.lessThan;
+proto['<='] = proto.lessOrEqualThan;
+proto['=='] = proto.equalTo;
+proto['!='] = proto.notEqualTo;
+proto['+'] = proto.plus;
+proto['-'] = proto.minus;
+proto['*'] = proto.times;
+proto['/'] = proto.dividedBy;
+proto['%'] = proto.mod;
+proto['+='] = proto.add;
+proto['-='] = proto.sub;
+proto['*='] = proto.mult;
+proto['/='] = proto.div;
