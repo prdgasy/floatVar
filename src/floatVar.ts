@@ -1,11 +1,9 @@
 import {
-	Macro as $,
 	_,
 	Data,
 	DataPointClass,
 	defaultNamespace,
 	execute,
-	MCFunction,
 	Score,
 	Variable
 } from "sandstone";
@@ -76,8 +74,8 @@ export class FloatVar {
 	 * Generates a random float in [min, max] (default [0, 1]).
 	 * @example
 	 * ```typescript
-	 * FloatVar.random(3).show()          // 0.254
-	 * FloatVar.random(1, -5, 5).show()   // -3.2
+	 * FloatVar.random(3)          // 0.254
+	 * FloatVar.random(1, -5, 5)   // -3.2
 	 * ```
 	 */
 	public static random(precision: number = 2, min: number = 0, max: number = 1): FloatVar {
@@ -163,53 +161,9 @@ export class FloatVar {
 	 * @param target Destination path (default: a unique path per instance)
 	 */
 	public toData(type: 'float' | 'double' = 'double', target?: DataPointClass): DataPointClass {
-		const dest = target ?? FloatVar.storage.select(`data_${this.id}`);
+		const dest = target ?? this.out;
 		execute.store.result(dest, type, 1 / this.scale).run.scoreboard.players.get(this.score);
 		return dest;
-	}
-
-	/** Returns an NBT number usable in tellraw. Each instance has its own path. */
-	public show(): DataPointClass {
-		const st = FloatVar.storage;
-		const sign = st.select('sign');
-		const unit = st.select('unit');
-		const temp = st.select('temp');
-		const p = this.precision;
-
-		const abs = Variable(this.score);
-		_.if(abs['<'](0), () => {
-			abs['*='](-1);
-			sign.set('-');
-		}).else(() => {
-			sign.set('');
-		});
-
-		const unitScore = Variable(abs);
-		unitScore['/='](this.scale);
-		unit.set(unitScore);
-
-		const args: DataPointClass[] = [sign, unit];
-		for (let i = p - 1; i >= 0; i--) {
-			const decimal = Variable(abs);
-			if (i > 0) decimal['/='](10 ** i);
-			decimal['%='](10);
-			const d_i = st.select(`d${i}`);
-			d_i.set(decimal);
-			args.push(d_i);
-		}
-
-		const setValue = MCFunction(`__lib/floatvar/set_value_${p}`, args, () => {
-			// ${sign}${unit}.${d(p-1)}...${d0}
-			const strings: string[] = new Array(args.length + 1).fill('');
-			if (p > 0) strings[2] = '.';
-			const tag = $ as unknown as (s: TemplateStringsArray, ...v: unknown[]) => any;
-			const text = tag(Object.assign(strings, { raw: strings }) as unknown as TemplateStringsArray, ...args);
-
-			$.data.modify(temp).set.value(text);
-		}, { onConflict: 'ignore' });
-		setValue();
-
-		return this.out.set(temp);
 	}
 
 	public set(value: numberLike) {
