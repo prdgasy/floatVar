@@ -1,1 +1,1 @@
-export * from './src/floatVar';
+export * from './src/float';

@@ -1,11 +1,16 @@
 import { comment, DataVariable, MCFunction, tellraw } from "sandstone";
-import { FloatVar } from "./floatVar";
+import { Float } from "./float";
 
 MCFunction('test', () => {
-	const a = new FloatVar(DataVariable(1.2), 5);
+	const a = Float.variable(1.5);
 	tellraw('@p', a.toData());
 
-	comment("============");
+	const xp = Float.objective('xp')
+	const player1 = xp('@p');
+	const player2 = xp('player_2');
 
-	a["+="](new FloatVar(2.5));
+	player1.set(0.1);
+	player2.set(Float.random());
+
+	a["+="](player1);
 });
