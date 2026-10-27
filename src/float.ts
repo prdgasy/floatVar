@@ -4,14 +4,15 @@ import {
 	DataPointClass,
 	defaultNamespace,
 	execute,
+	MCFunction,
 	Objective,
 	ObjectiveClass,
 	Score,
-	Variable
+	Variable,
+	Macro as $
 } from "sandstone";
 import { NotNode } from "sandstone/flow";
 import { ConditionClass } from "sandstone/variables";
-import { FloatObjective } from "./objective";
 import { SelectorArgument } from "sandstone/arguments";
 
 /**
@@ -167,6 +168,50 @@ export class Float {
 		const dest = target ?? this.out;
 		execute.store.result(dest, type, 1 / this.scale).run.scoreboard.players.get(this.score);
 		return dest;
+	}
+
+	/** Displays the float value with correct precision point. */
+	public show(): DataPointClass {
+		const st = Float.storage;
+		const sign = st.select('sign');
+		const unit = st.select('unit');
+		const temp = st.select('temp');
+		const p = this.precision;
+
+		const abs = Variable(this.score);
+		_.if(abs['<'](0), () => {
+			abs['*='](-1);
+			sign.set('-');
+		}).else(() => {
+			sign.set('');
+		});
+
+		const unitScore = Variable(abs);
+		unitScore['/='](this.scale);
+		unit.set(unitScore);
+
+		const args: DataPointClass[] = [sign, unit];
+		for (let i = p - 1; i >= 0; i--) {
+			const decimal = Variable(abs);
+			if (i > 0) decimal['/='](10 ** i);
+			decimal['%='](10);
+			const d_i = st.select(`d${i}`);
+			d_i.set(decimal);
+			args.push(d_i);
+		}
+
+		const setValue = MCFunction(`__lib/floatvar/set_value_${p}`, args, () => {
+			// ${sign}${unit}.${d(p-1)}...${d0}
+			const strings: string[] = new Array(args.length + 1).fill('');
+			if (p > 0) strings[2] = '.';
+			const tag = $ as unknown as (s: TemplateStringsArray, ...v: unknown[]) => any;
+			const text = tag(Object.assign(strings, { raw: strings }) as unknown as TemplateStringsArray, ...args);
+
+			$.data.modify(temp).set.value(text);
+		}, { onConflict: 'ignore' });
+		setValue();
+
+		return this.out.set(temp);
 	}
 
 
