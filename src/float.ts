@@ -54,11 +54,11 @@ export class Float {
 		this.score = Objective.create(name)(selector);
 	}
 
-	public static objective(name: string, precision = 2): FloatObjectiveType {
+	public static objective(name: string, precision = 1): FloatObjectiveType {
 		return (selector: SelectorArgument) => new Float(name, precision, selector, `${name}.out`);;
 	}
 
-	public static variable(value?: Values, precision = 2, raw = false): Float {
+	public static variable(value?: Values, precision = 1, raw = false): Float {
 		const id = Float.nextId++;
 		const f = new Float('prodigelib.float', precision, `var_${id}`, `var_${id}.out`);
 
